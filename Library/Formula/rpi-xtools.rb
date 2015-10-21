@@ -2,17 +2,12 @@ class RpiXtools < Formula
   desc "Cross-compiler toolchain for Raspberry Pi."
   homepage "http://n10k.com"
 
-  # version based on dependencies and config file
-  version "201302071302"
-  # no actual archive for this Formula; download something small and static.
+  # TODO: a more sophisticated version string?
+  version "201510201411"
+  # TODO: no actual archive for this Formula; download something small and static.
   url "http://brew.sh"
   sha256 "483957e091129c9cfacd3ccb19ddb143acbcaaf8abdfd081e070dd07a6259b86"
   keg_only "Add this toolchain to your $PATH only as needed."
-
-  resource "oldconfig" do
-    url "http://www.jaredwolff.com/toolchains/rpi-xtools-config-201302071302.zip"
-    sha1 "8eaf938e5892106e065b0998ea8511892211972c"
-  end
 
   # use ggrep and gmake for maximum compatibility
   depends_on "crosstool-ng" => [:build, "with-grep", "with-make"]
@@ -38,24 +33,36 @@ class RpiXtools < Formula
   # http://www.benmont.com/tech/crosscompiler.html
   def install
 
-    # create a case-sensitive workspace
     workdir = ''
+
+    ##
+    # create a case-sensitive workspace and attach
+    #
+
     args = %W[create -type SPARSE -fs JHFS+X -size 5g -volname #{name}-#{version} #{name}-#{version}]
     system "hdiutil", *args
     args = %W[attach #{name}-#{version}.sparseimage -mountpoint ./workspace]
     system "hdiutil", *args
+
     begin
       chdir("./workspace", :verbose => true) do
         workdir = pwd
-        # start with the defaults
-        system "ct-ng", "arm-unknown-linux-gnueabi"
-        # start with config from Jared Wolff
-#        resource("oldconfig").stage do
-#          mv "config", "#{workdir}/.config", :verbose => true
-#        end
 
-        #cp "/tmp/config-worked?", "./.config", :verbose => true
+        ##
+        # construct our .config file
+        #
+
+        # start with the defaults
+        # TODO: we're bringing our own config -- is this necissary?
+        system "ct-ng", "arm-unknown-linux-gnueabi"
+
+        # Pathname#write refuses to overwrite existing file
         (buildpath/"workspace/.config").delete
+        # start with config from Jared Wolff
+        # http://www.jaredwolff.com/toolchains/rpi-xtools-config-201302071302.zip
+        #
+        # modified by formula maintainer with more recent config options and
+        # turned into a template for string substitution, used later
         (buildpath/"workspace/.config").write <<-EOS
 #
 # Automatically generated make config: don't edit
@@ -630,40 +637,37 @@ CT_MPC_VERSION="1.0.1"
 # CT_TEST_SUITE_GCC is not set
 EOS
 
-        # replace our template
-        inreplace ".config", "%HOMEBREW_CACHE%", HOMEBREW_CACHE
-        inreplace ".config", "%workdir%", workdir
-        inreplace ".config", "%make_jobs%", "#{ENV.make_jobs}"
-        inreplace ".config", "%gettext_opt_include%", Formula["gettext"].opt_include
-        inreplace ".config", "%gettext_opt_lib%", Formula["gettext"].opt_lib
-        inreplace ".config", "%toolchain_pkgversion%", "Homebrew #{name} #{pkg_version} #{build.used_options*" "}".strip
-
-        # update with defaults incase crosstool-ng updated under us.
-        system "yes '' | ct-ng oldconfig"
+        ##
+        # replace our template parameters
+        #
 
         # retain downloaded files in homebrew cache
-        #inreplace ".config", /(CT_LOCAL_TARBALLS_DIR=).*/, "\\1\"#{HOMEBREW_CACHE}\""
-        # use workdir as workspace root
-        #inreplace ".config", /(CT_WORK_DIR=).*/, "\\1\"#{workdir}/.build\""
-        # use workdir as prefix. This is okay because toolchains are
-        # relocatable, according to https://sourceware.org/ml/crossgcc/2013-06/msg00027.html
-        #inreplace ".config", /(CT_PREFIX_DIR=).*/, "\\1\"#{workdir}/${CT_TARGET}\""
-        # install into #{prefix}
-        #inreplace ".config", /(CT_INSTALL_DIR=).*/, "\\1\"#{prefix}\""
-        # add gettext linker options
-        #inreplace ".config", /(CT_EXTRA_LDFLAGS_FOR_BUILD=).*/, "\\1\"-L#{Formula["gettext"].opt_lib} -lintl\""
+        inreplace ".config", "%HOMEBREW_CACHE%", HOMEBREW_CACHE
+        # use workdir as workspace root. also used as prefix. This is okay
+        # because toolchains are relocatable, according to
+        # https://sourceware.org/ml/crossgcc/2013-06/msg00027.html
+        inreplace ".config", "%workdir%", workdir
         # sane make parallelism
-        #inreplace ".config", /(CT_PARALLEL_JOBS=).*/, "\\1#{ENV.make_jobs}"
+        inreplace ".config", "%make_jobs%", "#{ENV.make_jobs}"
+        # add gettext include path and linker options
+        inreplace ".config", "%gettext_opt_include%", Formula["gettext"].opt_include
+        inreplace ".config", "%gettext_opt_lib%", Formula["gettext"].opt_lib
         # whoami
-        ##inreplace ".config", /(CT_TOOLCHAIN_PKGVERSION=).*/, "\\1\"Homebrew #{name} #{pkg_version} #{build.used_options*" "}\"".strip
-        # where bugs go
-        # CT_TOOLCHAIN_BUGURL=https://github.com/Homebrew/homebrew/issues
+        inreplace ".config", "%toolchain_pkgversion%",
+                  "Homebrew #{name} #{pkg_version} #{build.used_options*" "}".
+                    strip
+        # TODO: assert no %var% remains in .config
 
-        # finally, build!
+        # update with defaults in case crosstool-ng updated since our template
+        system "yes '' | ct-ng oldconfig"
+
+        ##
+        # finally, build and install
+        #
+
+        # need to up the ulimit from osx's default of 256
         system "ulimit -n 1024 && ct-ng build"
-        # can't use prefix.install for reasons unknown
         prefix.install Dir["arm-none-linux-gnueabi/*"]
-        # system "/usr/bin/env rsync -aHv arm-none-linux-gnueabi/* #{prefix}/"
       end
     ensure
       # be sure we don't leave the volume laying around
